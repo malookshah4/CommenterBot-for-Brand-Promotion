@@ -682,19 +682,28 @@ class TikTokReplyService : AccessibilityService() {
         return null
     }
 
-    /** Searches ALL accessibility windows for a send/post button by text, desc, or viewId */
+    /** Searches ALL accessibility windows for a send/post button by text, desc, or viewId.
+     *  Validates position: send button must be on the RIGHT side and BOTTOM half of screen.
+     *  Skips keyboard windows and generic "post" viewId (matches poster avatars). */
     private fun findSendButtonAcrossAllWindows(): AccessibilityNodeInfo? {
+        val dm = resources.displayMetrics
+        val bottomHalf = dm.heightPixels / 2f
         try {
             for (window in windows) {
+                if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
                 val wRoot = window.root ?: continue
                 val btn = findByContentDesc(wRoot, "Send", partial = false)
                     ?: findByText(wRoot, "Send")
                     ?: findByText(wRoot, "Post")
                     ?: findByContentDesc(wRoot, "Post", partial = false)
                     ?: findNodeByViewId(wRoot, "send")
-                    ?: findNodeByViewId(wRoot, "post")
                     ?: findNodeByViewId(wRoot, "submit")
-                if (btn != null) return btn
+                if (btn != null) {
+                    val r = Rect()
+                    btn.getBoundsInScreen(r)
+                    // Send button must be on the RIGHT side and in the BOTTOM half
+                    if (r.left > dm.widthPixels * 0.5f && r.top > bottomHalf) return btn
+                }
             }
         } catch (_: Exception) { }
         return null
