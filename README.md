@@ -1,4 +1,4 @@
-# CommenterBot
+# CommenterBot For Brand Promotion
 
 An Android app that automatically replies to TikTok video comments using Android's AccessibilityService.
 
