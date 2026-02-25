@@ -441,32 +441,41 @@ class TikTokReplyService : AccessibilityService() {
         val root = rootInActiveWindow ?: return retry(State.TAP_SEND, "No window")
         val input = findReplyInputField(root) ?: findInputAcrossAllWindows()
 
-        // ── Step 1: Search ALL windows for send button by text/desc/viewId ──
-        val sendBtn = findSendButtonAcrossAllWindows()
-        if (sendBtn != null) {
-            val cls = sendBtn.className?.toString()?.substringAfterLast(".") ?: "?"
-            val desc = sendBtn.contentDescription?.toString()?.take(30) ?: ""
-            val txt = sendBtn.text?.toString()?.take(20) ?: ""
-            log("Found send btn: [$cls] txt='$txt' desc='$desc'")
-            gestureTapNode(sendBtn)
-            sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        // Helper: tap a found send button and transition
+        fun tapSend(btn: AccessibilityNodeInfo): Boolean {
+            gestureTapNode(btn)
+            btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             transition(State.WAIT_AFTER_SEND, 800)
-            return
+            return true
         }
 
-        // ── Step 2: Find the send button in toolbar BELOW the input ──
+        // ── Step 1: Resource ID search (most precise — known TikTok IDs) ──
+        val byId = findSendByResourceId()
+        if (byId != null) { tapSend(byId); return }
+
+        // ── Step 2: Structural tree navigation (walk up from input, find rightmost button) ──
+        if (input != null) {
+            val byStructure = findSendByStructure(input)
+            if (byStructure != null) { tapSend(byStructure); return }
+        }
+
+        // ── Step 3: Text/desc/viewId search across all windows ──
+        val byText = findSendButtonAcrossAllWindows()
+        if (byText != null) {
+            val cls = byText.className?.toString()?.substringAfterLast(".") ?: "?"
+            val desc = byText.contentDescription?.toString()?.take(30) ?: ""
+            val txt = byText.text?.toString()?.take(20) ?: ""
+            log("Send by text/desc: [$cls] txt='$txt' desc='$desc'")
+            tapSend(byText); return
+        }
+
+        // ── Step 4: Position-based search below input ──
         if (input != null) {
             val sendBelow = findSendBelowInput(input)
             if (sendBelow != null) {
-                val cls = sendBelow.className?.toString()?.substringAfterLast(".") ?: "?"
-                val vid = sendBelow.viewIdResourceName?.substringAfterLast("/") ?: ""
-                val desc = sendBelow.contentDescription?.toString()?.take(30) ?: ""
                 val r = Rect(); sendBelow.getBoundsInScreen(r)
-                log("Found send below input: [$cls] id='$vid' desc='$desc' @(${r.left},${r.top})-(${r.right},${r.bottom})")
-                gestureTapNode(sendBelow)
-                sendBelow.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                transition(State.WAIT_AFTER_SEND, 800)
-                return
+                log("Send below input: @(${r.left},${r.top})-(${r.right},${r.bottom})")
+                tapSend(sendBelow); return
             }
         }
 
@@ -478,33 +487,29 @@ class TikTokReplyService : AccessibilityService() {
         input.getBoundsInScreen(inputRect)
         val dm = resources.displayMetrics
 
-        // ── Step 3: Strategy — tap at send button position BELOW input ──
-        // TikTok's send button (red up-arrow) is in a toolbar row DIRECTLY below
-        // the input field, at roughly 88-91% of screen width. The keyboard's "+"
-        // button is further right and lower — avoid hitting that.
+        // ── Step 5+: Fallback strategies when ALL node searches fail ──
         when (sendAttempt) {
             0 -> {
-                val tapX = dm.widthPixels * 0.90f
-                val tapY = inputRect.bottom.toFloat() + 25f
-                log("Send strategy #0: tap send ($tapX, $tapY)")
-                performTapGesture(tapX, tapY)
+                log("Fallback #0: IME_ENTER")
+                input.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
             }
             1 -> {
-                val tapX = dm.widthPixels * 0.88f
-                val tapY = inputRect.bottom.toFloat() + 35f
-                log("Send strategy #1: tap send alt ($tapX, $tapY)")
+                val tapX = dm.widthPixels * 0.90f
+                val tapY = inputRect.bottom.toFloat() + 25f
+                log("Fallback #1: position tap ($tapX, $tapY)")
                 performTapGesture(tapX, tapY)
             }
             2 -> {
-                val tapX = dm.widthPixels * 0.85f
-                val tapY = inputRect.bottom.toFloat() + 20f
-                log("Send strategy #2: tap send wider ($tapX, $tapY)")
+                val tapX = dm.widthPixels * 0.88f
+                val tapY = inputRect.bottom.toFloat() + 35f
+                log("Fallback #2: position tap ($tapX, $tapY)")
                 performTapGesture(tapX, tapY)
             }
             3 -> {
-                // IME_ENTER as last resort
-                log("Send strategy #3: IME_ENTER")
-                input.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                val tapX = dm.widthPixels * 0.85f
+                val tapY = inputRect.bottom.toFloat() + 20f
+                log("Fallback #3: position tap ($tapX, $tapY)")
+                performTapGesture(tapX, tapY)
             }
         }
 
@@ -709,18 +714,105 @@ class TikTokReplyService : AccessibilityService() {
         return null
     }
 
+    /** Searches all windows by known TikTok resource IDs for the send button.
+     *  This is the most reliable approach — immune to layout changes and position shifts. */
+    private fun findSendByResourceId(): AccessibilityNodeInfo? {
+        val knownIds = listOf(
+            "com.zhiliaoapp.musically:id/cfm",       // Known TikTok send/confirm button
+            "com.zhiliaoapp.musically:id/send",
+            "com.zhiliaoapp.musically:id/submit",
+            "com.zhiliaoapp.musically:id/send_btn",
+            "com.zhiliaoapp.musically:id/btn_send"
+        )
+        try {
+            for (window in windows) {
+                if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
+                val wRoot = window.root ?: continue
+                for (resId in knownIds) {
+                    val nodes = wRoot.findAccessibilityNodeInfosByViewId(resId)
+                    if (nodes.isNullOrEmpty()) continue
+                    for (node in nodes) {
+                        if (node.isClickable || node.isEnabled) {
+                            val r = Rect()
+                            node.getBoundsInScreen(r)
+                            if (r.width() > 0 && r.height() > 0) {
+                                log("Send by resourceId: $resId @(${r.left},${r.top})")
+                                return node
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return null
+    }
+
+    /** Walks UP the accessibility tree from the input field to find the send button
+     *  by structure: the rightmost clickable non-EditText node in the input's parent container.
+     *  In TikTok's comment bar layout, send is always the rightmost button in the toolbar. */
+    private fun findSendByStructure(input: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val dm = resources.displayMetrics
+        val screenCenterX = dm.widthPixels / 2f
+        var parent: AccessibilityNodeInfo? = input
+
+        // Walk up to 5 parent levels to find the toolbar/container
+        repeat(5) {
+            parent = parent?.parent ?: return null
+            val container = parent ?: return null
+
+            // Collect clickable children that are NOT text fields
+            val clickables = mutableListOf<AccessibilityNodeInfo>()
+            for (i in 0 until container.childCount) {
+                val child = container.getChild(i) ?: continue
+                collectClickableLeaves(child, clickables)
+            }
+
+            // Filter: must be on right side of screen, not an EditText
+            val rightSideBtns = clickables.filter { node ->
+                val cls = node.className?.toString() ?: ""
+                if (cls.contains("EditText", ignoreCase = true)) return@filter false
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                r.centerX() > screenCenterX && r.width() in 10..300 && r.height() in 10..300
+            }
+
+            if (rightSideBtns.isNotEmpty()) {
+                // Pick the rightmost one — that's the send button
+                val sendBtn = rightSideBtns.maxByOrNull { n -> val r = Rect(); n.getBoundsInScreen(r); r.centerX() }
+                if (sendBtn != null) {
+                    val r = Rect(); sendBtn.getBoundsInScreen(r)
+                    val cls = sendBtn.className?.toString()?.substringAfterLast(".") ?: "?"
+                    log("Send by structure: [$cls] @(${r.left},${r.top})-(${r.right},${r.bottom})")
+                    return sendBtn
+                }
+            }
+        }
+        return null
+    }
+
+    /** Collects clickable leaf nodes (or nodes with small child count) from a subtree */
+    private fun collectClickableLeaves(node: AccessibilityNodeInfo, result: MutableList<AccessibilityNodeInfo>) {
+        if (node.isClickable) {
+            result.add(node)
+            return // Don't descend into clickable nodes — they are the targets
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectClickableLeaves(child, result)
+        }
+    }
+
     /** Finds the send button in the toolbar BELOW the input field.
-     *  TikTok places a toolbar with [image][emoji][@]...[SEND] below the text input.
-     *  IMPORTANT: Skip keyboard (IME) windows — the keyboard's "+" button is also
-     *  clickable, below input, and far-right, but is NOT the send button. */
+     *  TikTok places a toolbar with [emoji bar][image][emoji][@]...[SEND] below the input.
+     *  The emoji bar adds ~60-80px gap, so the send button can be up to 200px below input.
+     *  IMPORTANT: Skip keyboard (IME) windows to avoid the keyboard's "+" button. */
     private fun findSendBelowInput(input: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val inputRect = Rect()
         input.getBoundsInScreen(inputRect)
         val dm = resources.displayMetrics
+        val screenCenterX = dm.widthPixels / 2f
         try {
             for (window in windows) {
-                // Skip keyboard/IME windows — they contain buttons like "+"
-                // that match our size/position criteria but aren't the send button
                 if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
                 val wRoot = window.root ?: continue
                 val candidates = collectNodes(wRoot) { node ->
@@ -729,14 +821,14 @@ class TikTokReplyService : AccessibilityService() {
                     if (cls.contains("EditText")) return@collectNodes false
                     val rect = Rect()
                     node.getBoundsInScreen(rect)
-                    // Must be BELOW the input, on the right half, and reasonably sized
+                    val centerX = rect.centerX().toFloat()
+                    // Must be BELOW the input, CENTER on the right half, and reasonably sized
                     rect.top >= inputRect.bottom - 15 &&
-                    rect.top <= inputRect.bottom + 120 &&
-                    rect.left > dm.widthPixels * 0.55f &&
+                    rect.top <= inputRect.bottom + 200 &&
+                    centerX > screenCenterX &&
                     rect.width() in 20..250 && rect.height() in 20..250
                 }
                 if (candidates.isNotEmpty()) {
-                    // Return the rightmost candidate (send button is at far right)
                     return candidates.maxByOrNull { val r = Rect(); it.getBoundsInScreen(r); r.left }
                 }
             }
