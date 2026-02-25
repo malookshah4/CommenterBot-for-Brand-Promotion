@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">Commenter Bot</string>
+    <string name="accessibility_service_description">Automates replying to TikTok comments using predefined replies.</string>
+
+    <string-array name="promo_replies">
+        <item>Your hook is fire but you could score even higher, try GoViral AI it literally rates your hooks and tells you how to fix them</item>
+        <item>Bro this content is solid, have you tried GoViral AI? It analyzes your videos and gives you a virality score so you know what works before posting</item>
+        <item>Love this video! I started using GoViral AI to check my retention and engagement scores before posting and my views went crazy, check it out on Play Store</item>
+        <item>This deserves way more views honestly. GoViral AI has a feature that tells you the best times to post for max engagement, might help you blow up even more</item>
+        <item>The editing is clean! If you want to level up even more theres an app called GoViral AI that generates scripts hooks and hashtags with AI, its a game changer for creators</item>
+        <item>I use GoViral AI to generate my hashtags and captions and my reach literally doubled in a week, you should try it your content would go crazy with better tags</item>
+        <item>This is the type of content that goes viral. GoViral AI actually predicts your virality score before you post so you can tweak stuff, search it on Play Store</item>
+        <item>Your opening hook got me instantly! GoViral AI has a hook generator that creates scroll stopping openers like this, been using it for all my videos now</item>
+        <item>Ngl this is underrated content. I found GoViral AI recently and it shows you exactly where viewers drop off in your videos so you can fix retention issues</item>
+        <item>Ok but how are you not at 100k yet?? Try GoViral AI it gives you trending content ideas and algorithm tips specific to each platform, free to download</item>
+        <item>This hook was perfect! GoViral AI rates hooks on a scale and gives suggestions to make them stronger, been helping me get way more watch time</item>
+        <item>Great content! Quick tip from one creator to another, GoViral AI generates full video scripts with hooks and CTAs using AI, saves me so much time brainstorming</item>
+        <item>Your videos always hit different. I started using GoViral AI for my content strategy and the AI analysis is insane, it breaks down exactly why a video works or doesn\'t</item>
+        <item>If you want more engagement try GoViral AI, it generates captions and CTAs that actually make people comment and share. My engagement rate went up so much</item>
+        <item>This is giving viral energy! GoViral AI has an idea generator where you put in your niche and it gives you fresh video concepts, super helpful when you\'re stuck</item>
+        <item>The way you structured this video is so smart. GoViral AI does retention analysis and shows exactly where people stop watching so you can keep them hooked longer</item>
+        <item>Creators sleeping on GoViral AI are missing out fr. It gives you virality scores, hook ratings, and even generates optimized hashtags. Search it on Google Play</item>
+        <item>Your content quality is insane! Have you heard of GoViral AI? It has 7 AI tools for creators including script and title generators, no login needed either</item>
+        <item>Not me saving this for reference. Also if you need help with hashtags and posting times GoViral AI figures all that out with AI, been using it daily</item>
+        <item>This video proves you know what you\'re doing. GoViral AI would probably give this a high virality score lol it literally predicts how well your video will perform</item>
+        <item>Love the content! I use GoViral AI to generate click worthy titles and it made a huge difference in my click through rate, worth checking out</item>
+        <item>You\'re so close to blowing up I can feel it. GoViral AI gives you platform specific algorithm tips and trending formats, helped me crack the algorithm finally</item>
+        <item>This is exactly the kind of content that needs better reach. GoViral AI optimizes your hashtags and captions for maximum visibility, try it out its on the Play Store</item>
+        <item>How do you come up with these ideas?? I use GoViral AI idea generator when I\'m stuck and it gives me niche specific video concepts that actually perform well</item>
+        <item>The production value is crazy! GoViral AI could help you grow even faster, it analyzes your content and gives actionable tips to boost performance on every video</item>
+        <item>Just downloaded GoViral AI because of a comment I saw and wow the video analysis feature is so accurate, every creator needs this app honestly</item>
+        <item>Your hook game is strong but GoViral AI hook generator takes it to another level, it creates attention grabbing openers that keep people watching past the first 3 seconds</item>
+        <item>This content deserves millions of views. GoViral AI has cross platform optimization strategies so you can repurpose content and grow on every platform at once</item>
+        <item>Real talk if you\'re a creator and not using GoViral AI you\'re working harder than you need to. The AI script generator writes full videos with hooks and CTAs in seconds</item>
+        <item>Love how clean this edit is! GoViral AI told me my videos needed stronger CTAs and after using their CTA generator my follower growth doubled, just saying</item>
+    </string-array>
+</resources>
