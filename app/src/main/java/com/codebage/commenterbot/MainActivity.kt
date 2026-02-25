@@ -7,9 +7,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,11 +27,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,7 +65,6 @@ import com.codebage.commenterbot.ui.theme.CommenterBotTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Initialize ReplyManager (seeds from strings.xml on first launch)
         ReplyManager.init(this, resources.getStringArray(R.array.promo_replies).toList())
         enableEdgeToEdge()
         setContent {
@@ -85,13 +91,42 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppRoot(modifier: Modifier = Modifier) {
     var currentScreen by remember { mutableStateOf("bot") }
+    var editingProfileId by remember { mutableStateOf<String?>(null) }
 
     when (currentScreen) {
         "bot" -> MainScreen(
             modifier = modifier,
-            onManageReplies = { currentScreen = "replies" }
+            onManageReplies = {
+                val activeId = ReplyManager.activeProfileId.value
+                if (activeId.isNotEmpty()) {
+                    editingProfileId = activeId
+                    currentScreen = "profile_edit"
+                }
+            },
+            onProfiles = { currentScreen = "profiles" },
+            onSettings = { currentScreen = "settings" }
         )
-        "replies" -> ReplyManagerScreen(
+        "profiles" -> ProfileListScreen(
+            modifier = modifier,
+            onBack = { currentScreen = "bot" },
+            onEditProfile = { id ->
+                editingProfileId = id
+                currentScreen = "profile_edit"
+            }
+        )
+        "profile_edit" -> {
+            val id = editingProfileId
+            if (id != null) {
+                ProfileEditScreen(
+                    modifier = modifier,
+                    profileId = id,
+                    onBack = { currentScreen = "profiles" }
+                )
+            } else {
+                currentScreen = "profiles"
+            }
+        }
+        "settings" -> SettingsScreen(
             modifier = modifier,
             onBack = { currentScreen = "bot" }
         )
@@ -101,18 +136,28 @@ fun AppRoot(modifier: Modifier = Modifier) {
 // ── Bot Control Screen ────────────────────────────────────────────────
 
 @Composable
-fun MainScreen(modifier: Modifier = Modifier, onManageReplies: () -> Unit = {}) {
+fun MainScreen(
+    modifier: Modifier = Modifier,
+    onManageReplies: () -> Unit = {},
+    onProfiles: () -> Unit = {},
+    onSettings: () -> Unit = {}
+) {
     val context = LocalContext.current
     var serviceConnected by remember { MainActivity.serviceConnected }
     val botEnabled by remember { TikTokReplyService.botEnabled }
     val status by remember { TikTokReplyService.status }
     val totalReplies by remember { TikTokReplyService.totalReplies }
     val videosProcessed by remember { TikTokReplyService.videosProcessed }
+    val dailyReplies by remember { ReplyManager.dailyReplies }
     val logs = TikTokReplyService.logs
 
     serviceConnected = TikTokReplyService.instance != null
 
+    val activeProfile = ReplyManager.getActiveProfile()
     val activeBotReplies = ReplyManager.replies.count { it.enabledForBot }
+
+    // Profile dropdown state
+    var profileDropdown by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -133,7 +178,74 @@ fun MainScreen(modifier: Modifier = Modifier, onManageReplies: () -> Unit = {}) 
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── Profile selector ────────────────────────────────────
+        Box {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { profileDropdown = true },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Profile",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text = activeProfile?.name ?: "No Profile",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    Text(
+                        text = "$activeBotReplies replies",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = profileDropdown,
+                onDismissRequest = { profileDropdown = false }
+            ) {
+                ReplyManager.profiles.forEach { profile ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (profile.id == ReplyManager.activeProfileId.value) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF4CAF50))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(profile.name)
+                            }
+                        },
+                        onClick = {
+                            ReplyManager.setActiveProfile(profile.id)
+                            profileDropdown = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // ── Service status card ─────────────────────────────────
         Card(
@@ -211,13 +323,32 @@ fun MainScreen(modifier: Modifier = Modifier, onManageReplies: () -> Unit = {}) 
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // ── Manage Replies button ───────────────────────────────
-        OutlinedButton(
-            onClick = onManageReplies,
+        // ── Action buttons row ──────────────────────────────────
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Manage Replies ($activeBotReplies active)")
+            OutlinedButton(
+                onClick = onManageReplies,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Replies", fontSize = 13.sp)
+            }
+            OutlinedButton(
+                onClick = onProfiles,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Profiles", fontSize = 13.sp)
+            }
+            OutlinedButton(
+                onClick = onSettings,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Settings", fontSize = 13.sp)
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -225,18 +356,11 @@ fun MainScreen(modifier: Modifier = Modifier, onManageReplies: () -> Unit = {}) 
         // ── Stats row ───────────────────────────────────────────
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            StatCard(
-                label = "Replies",
-                value = totalReplies.toString(),
-                modifier = Modifier.weight(1f)
-            )
-            StatCard(
-                label = "Videos",
-                value = videosProcessed.toString(),
-                modifier = Modifier.weight(1f)
-            )
+            StatCard(label = "Session", value = totalReplies.toString(), modifier = Modifier.weight(1f))
+            StatCard(label = "Videos", value = videosProcessed.toString(), modifier = Modifier.weight(1f))
+            StatCard(label = "Today", value = dailyReplies.toString(), modifier = Modifier.weight(1f))
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -289,17 +413,214 @@ fun MainScreen(modifier: Modifier = Modifier, onManageReplies: () -> Unit = {}) 
     }
 }
 
-// ── Reply Management Screen ───────────────────────────────────────────
+// ── Profile List Screen ──────────────────────────────────────────────
 
 @Composable
-fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
+fun ProfileListScreen(
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit,
+    onEditProfile: (String) -> Unit
+) {
+    val profiles = ReplyManager.profiles
+    val activeId by remember { ReplyManager.activeProfileId }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var newProfileName by remember { mutableStateOf("") }
+    var deleteConfirmId by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("< Back", fontSize = 15.sp) }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Profiles",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "${profiles.size} profiles",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 12.dp)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = { newProfileName = ""; showAddDialog = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text("+ Add New Profile")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(profiles.toList(), key = { it.id }) { profile ->
+                val isActive = profile.id == activeId
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isActive)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isActive) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF4CAF50))
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text(
+                                text = profile.name,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (!isActive) {
+                                TextButton(onClick = {
+                                    ReplyManager.setActiveProfile(profile.id)
+                                }) {
+                                    Text("Activate", fontSize = 12.sp)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = "${profile.replies.count { it.enabledForBot }} replies" +
+                                    if (profile.keywords.isNotEmpty()) " | ${profile.keywords.size} keywords" else "",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    ReplyManager.setActiveProfile(profile.id)
+                                    onEditProfile(profile.id)
+                                },
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Edit", fontSize = 12.sp)
+                            }
+                            if (profiles.size > 1) {
+                                OutlinedButton(
+                                    onClick = { deleteConfirmId = profile.id },
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Delete", fontSize = 12.sp, color = Color(0xFFD32F2F))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Add Profile dialog ──────────────────────────────────────
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("New Profile") },
+            text = {
+                OutlinedTextField(
+                    value = newProfileName,
+                    onValueChange = { newProfileName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Profile name (e.g., GoViral AI)") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newProfileName.isNotBlank()) {
+                            ReplyManager.addProfile(newProfileName)
+                            showAddDialog = false
+                        }
+                    },
+                    enabled = newProfileName.isNotBlank()
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // ── Delete confirmation ─────────────────────────────────────
+    if (deleteConfirmId != null) {
+        AlertDialog(
+            onDismissRequest = { deleteConfirmId = null },
+            title = { Text("Delete Profile") },
+            text = { Text("Delete this profile and all its replies?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        ReplyManager.deleteProfile(deleteConfirmId!!)
+                        deleteConfirmId = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteConfirmId = null }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+// ── Profile Edit Screen (Replies + Keywords) ─────────────────────────
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ProfileEditScreen(
+    modifier: Modifier = Modifier,
+    profileId: String,
+    onBack: () -> Unit
+) {
+    val profiles = ReplyManager.profiles
+    val profile = profiles.find { it.id == profileId } ?: run { onBack(); return }
     val replies = ReplyManager.replies
     val activeCount = replies.count { it.enabledForBot }
 
-    var showDialog by remember { mutableStateOf(false) }
+    var showReplyDialog by remember { mutableStateOf(false) }
     var editingReply by remember { mutableStateOf<ReplyItem?>(null) }
     var dialogText by remember { mutableStateOf("") }
     var deleteConfirmId by remember { mutableStateOf<String?>(null) }
+
+    // Name editing
+    var editingName by remember { mutableStateOf(false) }
+    var nameText by remember { mutableStateOf(profile.name) }
+
+    // Keyword adding
+    var keywordText by remember { mutableStateOf("") }
 
     Column(
         modifier = modifier
@@ -308,35 +629,164 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
     ) {
         // ── Header ──────────────────────────────────────────────
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) {
-                Text("< Back", fontSize = 15.sp)
-            }
+            TextButton(onClick = onBack) { Text("< Back", fontSize = 15.sp) }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Manage Replies",
+                text = "Edit Profile",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        Text(
-            text = "$activeCount active for bot / ${replies.size} total",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp)
-        )
+        // ── Profile name ────────────────────────────────────────
+        if (editingName) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = nameText,
+                    onValueChange = { nameText = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("Profile Name") },
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = {
+                    if (nameText.isNotBlank()) {
+                        ReplyManager.renameProfile(profileId, nameText)
+                        editingName = false
+                    }
+                }) { Text("Save") }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = profile.name,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = {
+                    nameText = profile.name
+                    editingName = true
+                }) { Text("Rename") }
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // ── Add New Reply button ────────────────────────────────
+        // ── Keywords section ────────────────────────────────────
+        Text(
+            text = "Keywords (optional)",
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = if (profile.keywords.isEmpty()) "Empty = reply to ALL comments"
+            else "Only reply when comment contains these words",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Keyword chips
+        if (profile.keywords.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                profile.keywords.forEach { kw ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = kw, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "x",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD32F2F),
+                                modifier = Modifier.clickable {
+                                    ReplyManager.removeKeyword(kw)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Add keyword
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = keywordText,
+                onValueChange = { keywordText = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Add keyword...") },
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    if (keywordText.isNotBlank()) {
+                        ReplyManager.addKeyword(keywordText)
+                        keywordText = ""
+                    }
+                },
+                enabled = keywordText.isNotBlank(),
+                shape = RoundedCornerShape(8.dp)
+            ) { Text("+") }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ── Replies section ─────────────────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Replies ($activeCount active / ${replies.size} total)",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Templates: {app_name} = profile name, {100-500} = random number",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         Button(
             onClick = {
                 editingReply = null
                 dialogText = ""
-                showDialog = true
+                showReplyDialog = true
             },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
@@ -344,9 +794,8 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
             Text("+ Add New Reply")
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // ── Reply list ──────────────────────────────────────────
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -359,7 +808,7 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
                     onEdit = {
                         editingReply = reply
                         dialogText = reply.text
-                        showDialog = true
+                        showReplyDialog = true
                     },
                     onDelete = { deleteConfirmId = reply.id }
                 )
@@ -367,13 +816,11 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
         }
     }
 
-    // ── Add / Edit dialog ───────────────────────────────────────
-    if (showDialog) {
+    // ── Add / Edit reply dialog ─────────────────────────────────
+    if (showReplyDialog) {
         AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = {
-                Text(if (editingReply != null) "Edit Reply" else "Add New Reply")
-            },
+            onDismissRequest = { showReplyDialog = false },
+            title = { Text(if (editingReply != null) "Edit Reply" else "Add New Reply") },
             text = {
                 OutlinedTextField(
                     value = dialogText,
@@ -394,23 +841,19 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
                             } else {
                                 ReplyManager.addReply(dialogText)
                             }
-                            showDialog = false
+                            showReplyDialog = false
                         }
                     },
                     enabled = dialogText.isNotBlank()
-                ) {
-                    Text("Save")
-                }
+                ) { Text("Save") }
             },
             dismissButton = {
-                TextButton(onClick = { showDialog = false }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { showReplyDialog = false }) { Text("Cancel") }
             }
         )
     }
 
-    // ── Delete confirmation dialog ──────────────────────────────
+    // ── Delete reply confirmation ───────────────────────────────
     if (deleteConfirmId != null) {
         AlertDialog(
             onDismissRequest = { deleteConfirmId = null },
@@ -423,20 +866,167 @@ fun ReplyManagerScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
                         deleteConfirmId = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                ) {
-                    Text("Delete")
-                }
+                ) { Text("Delete") }
             },
             dismissButton = {
-                TextButton(onClick = { deleteConfirmId = null }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { deleteConfirmId = null }) { Text("Cancel") }
             }
         )
     }
 }
 
-// ── Reply Item Card ───────────────────────────────────────────────────
+// ── Settings Screen ──────────────────────────────────────────────────
+
+@Composable
+fun SettingsScreen(modifier: Modifier = Modifier, onBack: () -> Unit) {
+    val settings by remember { ReplyManager.botSettings }
+
+    var minDelay by remember { mutableStateOf(settings.minDelaySeconds.toString()) }
+    var maxDelay by remember { mutableStateOf(settings.maxDelaySeconds.toString()) }
+    var maxPerHour by remember { mutableStateOf(settings.maxRepliesPerHour.toString()) }
+    var dailyLimit by remember { mutableStateOf(settings.dailyReplyLimit.toString()) }
+    var autoStopReplies by remember { mutableStateOf(settings.autoStopAfterReplies.toString()) }
+    var autoStopMinutes by remember { mutableStateOf(settings.autoStopAfterMinutes.toString()) }
+
+    fun save() {
+        ReplyManager.updateSettings(
+            BotSettings(
+                minDelaySeconds = minDelay.toIntOrNull() ?: 3,
+                maxDelaySeconds = maxDelay.toIntOrNull() ?: 8,
+                maxRepliesPerHour = maxPerHour.toIntOrNull() ?: 0,
+                dailyReplyLimit = dailyLimit.toIntOrNull() ?: 0,
+                autoStopAfterReplies = autoStopReplies.toIntOrNull() ?: 0,
+                autoStopAfterMinutes = autoStopMinutes.toIntOrNull() ?: 0
+            )
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(20.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { save(); onBack() }) { Text("< Back", fontSize = 15.sp) }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Settings",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ── Reply Delay ─────────────────────────────────────────
+        Text(
+            text = "Reply Delay",
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp
+        )
+        Text(
+            text = "Time between each reply (seconds)",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = minDelay,
+                onValueChange = { minDelay = it },
+                modifier = Modifier.weight(1f),
+                label = { Text("Min") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = maxDelay,
+                onValueChange = { maxDelay = it },
+                modifier = Modifier.weight(1f),
+                label = { Text("Max") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ── Rate Limits ─────────────────────────────────────────
+        Text(
+            text = "Rate Limits",
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp
+        )
+        Text(
+            text = "0 = unlimited",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = maxPerHour,
+            onValueChange = { maxPerHour = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Max replies per hour") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = dailyLimit,
+            onValueChange = { dailyLimit = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Daily reply limit") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ── Auto-Stop ───────────────────────────────────────────
+        Text(
+            text = "Auto-Stop",
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 16.sp
+        )
+        Text(
+            text = "Bot stops automatically (0 = never)",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = autoStopReplies,
+            onValueChange = { autoStopReplies = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Stop after N replies") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = autoStopMinutes,
+            onValueChange = { autoStopMinutes = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Stop after N minutes") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = { save() },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text("Save Settings")
+        }
+    }
+}
+
+// ── Reply Item Card ──────────────────────────────────────────────────
 
 @Composable
 fun ReplyItemCard(
@@ -460,7 +1050,6 @@ fun ReplyItemCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Index number
                 Text(
                     text = "#$index",
                     fontSize = 12.sp,
@@ -469,7 +1058,6 @@ fun ReplyItemCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Bot toggle switch
                 Switch(
                     checked = reply.enabledForBot,
                     onCheckedChange = { onToggle() },
@@ -487,12 +1075,9 @@ fun ReplyItemCard(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Edit button
                 TextButton(onClick = onEdit) {
                     Text("Edit", fontSize = 12.sp)
                 }
-
-                // Delete button
                 TextButton(onClick = onDelete) {
                     Text("Del", fontSize = 12.sp, color = Color(0xFFD32F2F))
                 }
@@ -500,7 +1085,6 @@ fun ReplyItemCard(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Reply text
             Text(
                 text = reply.text,
                 fontSize = 13.sp,
@@ -516,7 +1100,7 @@ fun ReplyItemCard(
     }
 }
 
-// ── Stat Card ─────────────────────────────────────────────────────────
+// ── Stat Card ────────────────────────────────────────────────────────
 
 @Composable
 fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {

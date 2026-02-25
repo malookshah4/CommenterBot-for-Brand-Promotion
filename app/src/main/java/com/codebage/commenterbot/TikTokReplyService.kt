@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import java.text.SimpleDateFormat
@@ -47,6 +48,7 @@ class TikTokReplyService : AccessibilityService() {
 
     private var currentState = State.IDLE
     private var isTikTokForeground = false
+    private var sessionStartTime = 0L
 
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
@@ -117,6 +119,7 @@ class TikTokReplyService : AccessibilityService() {
         botEnabled.value = true
         totalReplies.value = 0
         videosProcessed.value = 0
+        sessionStartTime = System.currentTimeMillis()
         if (isTikTokForeground) {
             startBotLoop()
         } else {
@@ -163,6 +166,22 @@ class TikTokReplyService : AccessibilityService() {
         }
         if (!isTikTokForeground) {
             currentState = State.IDLE; status.value = "Waiting for TikTok…"; return
+        }
+
+        // Auto-stop checks (only at safe transition points)
+        if (currentState == State.FIND_REPLY_BUTTON || currentState == State.FIND_COMMENTS_BUTTON) {
+            val settings = ReplyManager.botSettings.value
+            if (settings.autoStopAfterReplies > 0 && totalReplies.value >= settings.autoStopAfterReplies) {
+                log("Auto-stop: reached ${settings.autoStopAfterReplies} replies")
+                stopBot(); return
+            }
+            if (settings.autoStopAfterMinutes > 0 && sessionStartTime > 0) {
+                val elapsed = (System.currentTimeMillis() - sessionStartTime) / 60_000
+                if (elapsed >= settings.autoStopAfterMinutes) {
+                    log("Auto-stop: reached ${settings.autoStopAfterMinutes} minutes")
+                    stopBot(); return
+                }
+            }
         }
 
         when (currentState) {
@@ -252,11 +271,37 @@ class TikTokReplyService : AccessibilityService() {
             transition(State.CLOSE_COMMENTS, 200); return
         }
 
+        // Check rate limits before starting a new reply
+        if (!ReplyManager.canSendReply()) {
+            if (ReplyManager.isDailyLimitHit()) {
+                log("Daily limit reached. Stopping.")
+                stopBot(); return
+            }
+            log("Hourly limit reached — waiting 60s")
+            transition(State.FIND_REPLY_BUTTON, 60_000); return
+        }
+
         status.value = "Reply ${repliesInCurrentVideo + 1}/$targetReplies"
         val root = rootInActiveWindow ?: return retry(State.FIND_REPLY_BUTTON, "No window")
         val btn = findByText(root, "Reply") ?: findByText(root, "reply")
 
         if (btn != null) {
+            // Keyword filtering: if keywords are set, only reply to matching comments
+            val keywords = ReplyManager.getActiveKeywords()
+            if (keywords.isNotEmpty()) {
+                val commentText = getCommentTextNearNode(btn)
+                if (!keywords.any { kw -> commentText.contains(kw, ignoreCase = true) }) {
+                    scrollAttempts++
+                    if (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
+                        performSmallCommentScroll()
+                        transition(State.FIND_REPLY_BUTTON, 500)
+                    } else {
+                        scrollAttempts = 0
+                        transition(State.CLOSE_COMMENTS, 150)
+                    }
+                    return
+                }
+            }
             retryCount = 0; scrollAttempts = 0
             transition(State.TAP_REPLY, 100)
         } else if (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
@@ -303,6 +348,7 @@ class TikTokReplyService : AccessibilityService() {
                 log("No bot replies configured!"); haltLoop(); return
             }
             pendingReply = botReplies[Random.nextInt(botReplies.size)]
+            pendingReply = ReplyManager.processTemplate(pendingReply)
             log("Selected reply: '${pendingReply.take(40)}…'")
             transition(State.ENTER_TEXT, 300)
         } else {
@@ -480,6 +526,7 @@ class TikTokReplyService : AccessibilityService() {
             // SUCCESS — our reply text is gone, TikTok accepted the reply!
             repliesInCurrentVideo++
             totalReplies.value++
+            ReplyManager.recordReply()
             sendAttempt = 0
             retryCount = 0
             log("Reply sent! (${repliesInCurrentVideo}/$targetReplies) [total:${totalReplies.value}]")
@@ -487,7 +534,7 @@ class TikTokReplyService : AccessibilityService() {
             // Do NOT press BACK — TikTok already returned to normal comment view,
             // and BACK would close the entire comments panel.
             performSmallCommentScroll()
-            transition(State.FIND_REPLY_BUTTON, randomDelay(800, 1200))
+            transition(State.FIND_REPLY_BUTTON, ReplyManager.getReplyDelay())
         } else {
             // FAILED — input still has text, send didn't work
             log("Post-send: field='${fieldText.take(30)}' (len=${fieldText.length})")
@@ -653,14 +700,19 @@ class TikTokReplyService : AccessibilityService() {
         return null
     }
 
-    /** Finds the send button in the toolbar BELOW the input field across ALL windows.
-     *  TikTok places a toolbar with [image][emoji][@]...[SEND] below the text input. */
+    /** Finds the send button in the toolbar BELOW the input field.
+     *  TikTok places a toolbar with [image][emoji][@]...[SEND] below the text input.
+     *  IMPORTANT: Skip keyboard (IME) windows — the keyboard's "+" button is also
+     *  clickable, below input, and far-right, but is NOT the send button. */
     private fun findSendBelowInput(input: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val inputRect = Rect()
         input.getBoundsInScreen(inputRect)
         val dm = resources.displayMetrics
         try {
             for (window in windows) {
+                // Skip keyboard/IME windows — they contain buttons like "+"
+                // that match our size/position criteria but aren't the send button
+                if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) continue
                 val wRoot = window.root ?: continue
                 val candidates = collectNodes(wRoot) { node ->
                     if (!node.isClickable) return@collectNodes false
@@ -670,7 +722,7 @@ class TikTokReplyService : AccessibilityService() {
                     node.getBoundsInScreen(rect)
                     // Must be BELOW the input, on the right half, and reasonably sized
                     rect.top >= inputRect.bottom - 15 &&
-                    rect.top <= inputRect.bottom + 180 &&
+                    rect.top <= inputRect.bottom + 120 &&
                     rect.left > dm.widthPixels * 0.55f &&
                     rect.width() in 20..250 && rect.height() in 20..250
                 }
@@ -795,6 +847,28 @@ class TikTokReplyService : AccessibilityService() {
             performTapGesture(rect.centerX().toFloat(), rect.centerY().toFloat())
         } else {
             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+    }
+
+    // ── Keyword helpers ──────────────────────────────────────────────────
+
+    /** Walks up the accessibility tree from a node to find surrounding comment text */
+    private fun getCommentTextNearNode(node: AccessibilityNodeInfo): String {
+        var container: AccessibilityNodeInfo = node
+        repeat(3) { container = container.parent ?: return@repeat }
+        val texts = mutableListOf<String>()
+        collectTextFromTree(container, texts)
+        return texts.joinToString(" ")
+    }
+
+    private fun collectTextFromTree(node: AccessibilityNodeInfo, result: MutableList<String>) {
+        val text = node.text?.toString()
+        if (!text.isNullOrBlank() && text.length > 5) {
+            result.add(text)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectTextFromTree(child, result)
         }
     }
 
